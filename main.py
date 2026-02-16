@@ -46,22 +46,24 @@ def notify_line(message):
         print(f"[ERROR] LINE通知に失敗: {e}")
 
 # ======================
-# 価格取得（Jupiter Price API V3）
+# 価格取得（DexScreener API）
 # ======================
 
 def get_price(mint):
-    url = "https://api.jup.ag/price/v3/price"
-    params = {"ids": mint}
-    r = requests.get(url, params=params, timeout=10)
+    url = f"https://api.dexscreener.com/tokens/v1/solana/{mint}"
+    r = requests.get(url, timeout=10)
     data = r.json()
 
     if DEBUG:
-        print(f"[DEBUG] API response: {data}")
+        if isinstance(data, list) and data:
+            print(f"[DEBUG] API response (1st pair): priceUsd={data[0].get('priceUsd')}")
+        else:
+            print(f"[DEBUG] API response: {data}")
 
-    if mint not in data:
+    if not isinstance(data, list) or not data:
         return None
 
-    return data[mint]["usdPrice"]
+    return float(data[0]["priceUsd"])
 
 # ======================
 # メイン監視ロジック
