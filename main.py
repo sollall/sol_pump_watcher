@@ -50,10 +50,13 @@ def notify_line(message):
 # ======================
 
 def get_price(mint):
-    url = "https://api.jup.ag/price/v3"
+    url = "https://api.jup.ag/price/v3/price"
     params = {"ids": mint}
     r = requests.get(url, params=params, timeout=10)
     data = r.json()
+
+    if DEBUG:
+        print(f"[DEBUG] API response: {data}")
 
     if mint not in data:
         return None
