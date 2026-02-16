@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime
 
 import requests
 
@@ -62,16 +63,38 @@ def get_price(mint):
 # メイン監視ロジック
 # ======================
 
+def check_and_alert(symbol, price, base_prices):
+    """基準価格と比較し、閾値を超えていればアラートを送信する。"""
+    if symbol not in base_prices:
+        return
+    prev = base_prices[symbol]
+    change = (price - prev) / prev
+    if change >= PUMP_THRESHOLD:
+        msg = (
+            f"\n{symbol} 急騰！\n"
+            f"価格: {price:.6f}\n"
+            f"変動率: +{change*100:.2f}%"
+        )
+        print(msg)
+        notify_line(msg)
+
+
 def main():
-    last_prices = {}
+    base_prices = {}
+    last_hour = datetime.now().replace(minute=0, second=0, microsecond=0)
 
     if DEBUG:
         print("[DEBUG] デバッグモードで起動")
         print(f"[DEBUG] CHECK_INTERVAL={CHECK_INTERVAL}秒, PUMP_THRESHOLD={PUMP_THRESHOLD*100:.0f}%")
+    else:
+        print(f"本番モード: 時間足({last_hour.strftime('%H:%M')})の更新タイミングでアラート判定")
 
     print("Solana Pump Watcher 起動しました")
 
     while True:
+        now = datetime.now()
+        current_hour = now.replace(minute=0, second=0, microsecond=0)
+
         for symbol, mint in TOKENS.items():
             try:
                 price = get_price(mint)
@@ -81,25 +104,24 @@ def main():
                     continue
 
                 if DEBUG:
+                    # デバッグ: 毎サイクルで即時アラート判定
                     print(f"[DEBUG] {symbol}: {price:.10f} USD")
-
-                if symbol in last_prices:
-                    prev = last_prices[symbol]
-                    change = (price - prev) / prev
-
-                    if change >= PUMP_THRESHOLD:
-                        msg = (
-                            f"\n{symbol} 急騰！\n"
-                            f"価格: {price:.6f}\n"
-                            f"変動率: +{change*100:.2f}%"
-                        )
-                        print(msg)
-                        notify_line(msg)
-
-                last_prices[symbol] = price
+                    check_and_alert(symbol, price, base_prices)
+                    base_prices[symbol] = price
+                else:
+                    # 本番: 時間足の更新タイミングでアラート判定
+                    if current_hour != last_hour:
+                        check_and_alert(symbol, price, base_prices)
+                        base_prices[symbol] = price
+                    elif symbol not in base_prices:
+                        base_prices[symbol] = price
 
             except Exception as e:
                 print(f"[ERROR] {symbol}: {e}")
+
+        if not DEBUG and current_hour != last_hour:
+            print(f"時間足更新: {last_hour.strftime('%H:%M')} → {current_hour.strftime('%H:%M')}")
+            last_hour = current_hour
 
         time.sleep(CHECK_INTERVAL)
 
