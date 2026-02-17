@@ -49,21 +49,35 @@ def notify_line(message):
 # 価格取得（DexScreener API）
 # ======================
 
-def get_price(mint):
-    url = f"https://api.dexscreener.com/tokens/v1/solana/{mint}"
+def get_prices(tokens):
+    """全トークンの価格を一括取得する。mintアドレス→USD価格の辞書を返す。"""
+    mints = list(tokens.values())
+    url = f"https://api.dexscreener.com/tokens/v1/solana/{','.join(mints)}"
     r = requests.get(url, timeout=10)
     data = r.json()
 
-    if DEBUG:
-        if isinstance(data, list) and data:
-            print(f"[DEBUG] API response (1st pair): priceUsd={data[0].get('priceUsd')}")
-        else:
+    if not isinstance(data, list):
+        if DEBUG:
             print(f"[DEBUG] API response: {data}")
+        return {}
 
-    if not isinstance(data, list) or not data:
-        return None
+    # mintアドレスごとに最初のペア（最も流動性が高い）の価格を取得
+    prices = {}
+    for pair in data:
+        addr = pair.get("baseToken", {}).get("address")
+        if addr and addr in mints and addr not in prices:
+            price_usd = pair.get("priceUsd")
+            if price_usd:
+                prices[addr] = float(price_usd)
 
-    return float(data[0]["priceUsd"])
+    if DEBUG:
+        for symbol, mint in tokens.items():
+            if mint in prices:
+                print(f"[DEBUG] {symbol}: {prices[mint]:.10f} USD")
+            else:
+                print(f"[DEBUG] {symbol}: 価格取得できず")
+
+    return prices
 
 # ======================
 # メイン監視ロジック
@@ -108,29 +122,29 @@ def main():
         now = datetime.now()
         current_candle = get_candle_time(now)
 
-        for symbol, mint in TOKENS.items():
-            try:
-                price = get_price(mint)
-                if price is None:
-                    if DEBUG:
-                        print(f"[DEBUG] {symbol}: 価格取得できず")
-                    continue
+        try:
+            prices = get_prices(TOKENS)
+        except Exception as e:
+            print(f"[ERROR] 価格取得失敗: {e}")
+            time.sleep(CHECK_INTERVAL)
+            continue
 
-                if DEBUG:
-                    # デバッグ: 毎サイクルで即時アラート判定
-                    print(f"[DEBUG] {symbol}: {price:.10f} USD")
+        for symbol, mint in TOKENS.items():
+            price = prices.get(mint)
+            if price is None:
+                continue
+
+            if DEBUG:
+                # デバッグ: 毎サイクルで即時アラート判定
+                check_and_alert(symbol, price, base_prices)
+                base_prices[symbol] = price
+            else:
+                # 本番: N分足の更新タイミングでアラート判定
+                if current_candle != last_candle:
                     check_and_alert(symbol, price, base_prices)
                     base_prices[symbol] = price
-                else:
-                    # 本番: N分足の更新タイミングでアラート判定
-                    if current_candle != last_candle:
-                        check_and_alert(symbol, price, base_prices)
-                        base_prices[symbol] = price
-                    elif symbol not in base_prices:
-                        base_prices[symbol] = price
-
-            except Exception as e:
-                print(f"[ERROR] {symbol}: {e}")
+                elif symbol not in base_prices:
+                    base_prices[symbol] = price
 
         if not DEBUG and current_candle != last_candle:
             print(f"{CANDLE_MINUTES}分足更新: {last_candle.strftime('%H:%M')} → {current_candle.strftime('%H:%M')}")
