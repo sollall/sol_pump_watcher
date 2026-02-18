@@ -1,3 +1,4 @@
+import argparse
 import os
 import time
 from datetime import datetime
@@ -8,7 +9,7 @@ import requests
 # 設定
 # ======================
 
-DEBUG = os.environ.get("DEBUG", "false").lower() in ("true", "1", "yes")
+DEBUG = False
 
 LINE_TOKEN = os.environ.get("LINE_NOTIFY_TOKEN", "")
 
@@ -17,7 +18,7 @@ TOKENS = {
     "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
 }
 
-CHECK_INTERVAL = 10 if DEBUG else 30  # 秒（デバッグ時は短縮）
+CHECK_INTERVAL = 30  # 秒（デバッグ時は10秒に短縮）
 CANDLE_MINUTES = int(os.environ.get("CANDLE_MINUTES", "60"))  # N分足（デフォルト60分）
 PUMP_THRESHOLD = 0.10  # 10%
 
@@ -106,7 +107,19 @@ def check_and_alert(symbol, price, base_prices):
         notify_line(msg)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Solana Pump Watcher")
+    parser.add_argument("--debug", action="store_true", help="デバッグモードで起動")
+    return parser.parse_args()
+
+
 def main():
+    global DEBUG, CHECK_INTERVAL
+    args = parse_args()
+    DEBUG = args.debug or os.environ.get("DEBUG", "false").lower() in ("true", "1", "yes")
+    if DEBUG:
+        CHECK_INTERVAL = 10
+
     base_prices = {}
     last_candle = get_candle_time(datetime.now())
 
