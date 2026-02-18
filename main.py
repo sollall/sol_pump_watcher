@@ -127,7 +127,8 @@ def main():
     if DEBUG:
         CHECK_INTERVAL = 10
 
-    base_prices = {}
+    prev_close = {}      # 前の足の終値（アラート判定の基準）
+    last_prices = {}     # 現在の足で最後に取得した価格（次の足の終値になる）
     last_candle = get_candle_time(datetime.now())
 
     if DEBUG:
@@ -149,26 +150,27 @@ def main():
             time.sleep(CHECK_INTERVAL)
             continue
 
+        # 足が切り替わったら、前の足の最終価格を基準として確定
+        if not DEBUG and current_candle != last_candle:
+            if last_prices:
+                prev_close = last_prices.copy()
+            print(f"{CANDLE_MINUTES}分足更新: {last_candle.strftime('%H:%M')} → {current_candle.strftime('%H:%M')}")
+            last_candle = current_candle
+
         for symbol, mint in TOKENS.items():
             price = prices.get(mint)
             if price is None:
                 continue
 
+            last_prices[symbol] = price
+
             if DEBUG:
                 # デバッグ: 毎サイクルで即時アラート判定
-                check_and_alert(symbol, price, base_prices)
-                base_prices[symbol] = price
+                check_and_alert(symbol, price, prev_close)
+                prev_close[symbol] = price
             else:
-                # 本番: N分足の更新タイミングでアラート判定
-                if current_candle != last_candle:
-                    check_and_alert(symbol, price, base_prices)
-                    base_prices[symbol] = price
-                elif symbol not in base_prices:
-                    base_prices[symbol] = price
-
-        if not DEBUG and current_candle != last_candle:
-            print(f"{CANDLE_MINUTES}分足更新: {last_candle.strftime('%H:%M')} → {current_candle.strftime('%H:%M')}")
-            last_candle = current_candle
+                # 本番: 前の足の終値と比較してアラート判定
+                check_and_alert(symbol, price, prev_close)
 
         time.sleep(CHECK_INTERVAL)
 
