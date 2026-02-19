@@ -28,12 +28,14 @@ CHECK_INTERVAL = 30  # 秒（デバッグ時は10秒に短縮）
 CANDLE_MINUTES = int(os.environ.get("CANDLE_MINUTES", "60"))  # N分足（デフォルト60分）
 PUMP_THRESHOLD = 0.10  # 10%
 
-# DexScreenerのpriceChangeフィールドに対応する時間足
+# GeckoTerminal OHLCV timeframe: CANDLE_MINUTES -> (endpoint_timeframe, aggregate)
 TIMEFRAME_MAP = {
-    5: "m5",
-    60: "h1",
-    360: "h6",
-    1440: "h24",
+    5: ("minute", 5),
+    15: ("minute", 15),
+    60: ("hour", 1),
+    240: ("hour", 4),
+    360: ("hour", 6),
+    1440: ("day", 1),
 }
 
 # ======================
@@ -61,68 +63,67 @@ def notify_line(message):
         print(f"[ERROR] LINE通知に失敗: {e}")
 
 # ======================
-# 価格取得（DexScreener API）
+# GeckoTerminal API
 # ======================
 
-def get_token_data(tokens):
-    """全トークンの価格と変動率を一括取得する。"""
-    mints = list(tokens.values())
-    url = f"https://api.dexscreener.com/tokens/v1/solana/{','.join(mints)}"
-    r = requests.get(url, timeout=10)
+GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2"
+
+
+def resolve_pools(tokens):
+    """各トークンのトップ・プールアドレスをGeckoTerminalから取得する。"""
+    pools = {}
+    for symbol, mint in tokens.items():
+        try:
+            url = f"{GECKOTERMINAL_BASE}/networks/solana/tokens/{mint}/pools"
+            r = requests.get(url, params={"page": 1}, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            pool_list = data.get("data", [])
+            if pool_list:
+                pool_addr = pool_list[0].get("attributes", {}).get("address")
+                if pool_addr:
+                    pools[symbol] = pool_addr
+                    if DEBUG:
+                        name = pool_list[0].get("attributes", {}).get("name", "")
+                        print(f"[DEBUG] {symbol}: pool={pool_addr} ({name})")
+            else:
+                print(f"[WARN] {symbol}: プールが見つかりません")
+        except Exception as e:
+            print(f"[ERROR] {symbol} プール取得失敗: {e}")
+        time.sleep(0.5)  # rate limit 対策
+    return pools
+
+
+def get_confirmed_candle(pool_address):
+    """確定済みの最新ローソク足（1つ前の足）をGeckoTerminalから取得する。
+
+    ohlcv_list は新しい順。index 0 = 形成中の足、index 1 = 確定済みの足。
+    """
+    tf, agg = TIMEFRAME_MAP[CANDLE_MINUTES]
+    url = f"{GECKOTERMINAL_BASE}/networks/solana/pools/{pool_address}/ohlcv/{tf}"
+    params = {"aggregate": agg, "limit": 2, "currency": "usd"}
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
     data = r.json()
 
-    if not isinstance(data, list):
-        if DEBUG:
-            print(f"[DEBUG] API response: {data}")
-        return {}
+    ohlcv_list = data.get("data", {}).get("attributes", {}).get("ohlcv_list", [])
+    if len(ohlcv_list) < 2:
+        return None
 
-    tf_key = TIMEFRAME_MAP.get(CANDLE_MINUTES, "h1")
-    result = {}
-    for pair in data:
-        addr = pair.get("baseToken", {}).get("address")
-        if addr and addr in mints and addr not in result:
-            price_usd = pair.get("priceUsd")
-            change_pct = pair.get("priceChange", {}).get(tf_key)
-            if price_usd and change_pct is not None:
-                result[addr] = {
-                    "price": float(price_usd),
-                    "change": float(change_pct) / 100,
-                }
-
-    if DEBUG:
-        for symbol, mint in tokens.items():
-            d = result.get(mint)
-            if d:
-                print(f"[DEBUG] {symbol}: {d['price']:.10f} USD (変動: {d['change']*100:+.2f}%)")
-            else:
-                print(f"[DEBUG] {symbol}: データ取得できず")
-
-    return result
+    # index 1 = 確定済みの足: [timestamp, open, high, low, close, volume]
+    c = ohlcv_list[1]
+    return {
+        "timestamp": int(c[0]),
+        "open": float(c[1]),
+        "high": float(c[2]),
+        "low": float(c[3]),
+        "close": float(c[4]),
+        "volume": float(c[5]),
+    }
 
 # ======================
 # メイン監視ロジック
 # ======================
-
-def check_and_alert(symbol, price, change, alerted):
-    """変動率が閾値を超えていればアラートを送信する（同一足内での重複防止付き）。"""
-    if change < PUMP_THRESHOLD:
-        alerted.pop(symbol, None)
-        return
-
-    now = time.time()
-    last_alert = alerted.get(symbol, 0)
-    if now - last_alert < CANDLE_MINUTES * 60:
-        return
-
-    msg = (
-        f"\n{symbol} 急騰！\n"
-        f"価格: {price:.6f}\n"
-        f"変動率: {change*100:+.2f}%"
-    )
-    print(msg)
-    notify_line(msg)
-    alerted[symbol] = now
-
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Solana Pump Watcher")
@@ -137,35 +138,59 @@ def main():
     if DEBUG:
         CHECK_INTERVAL = 10
 
-    tf_key = TIMEFRAME_MAP.get(CANDLE_MINUTES)
-    if tf_key is None:
+    if CANDLE_MINUTES not in TIMEFRAME_MAP:
         supported = ", ".join(str(m) for m in sorted(TIMEFRAME_MAP))
         print(f"[ERROR] CANDLE_MINUTES={CANDLE_MINUTES} は未対応です（対応: {supported}）")
         return
 
-    alerted = {}  # symbol -> 最後にアラートした時刻
-
     if DEBUG:
         print("[DEBUG] デバッグモードで起動")
-        print(f"[DEBUG] CHECK_INTERVAL={CHECK_INTERVAL}秒, 時間足={tf_key}, PUMP_THRESHOLD={PUMP_THRESHOLD*100:.0f}%")
+        print(f"[DEBUG] CHECK_INTERVAL={CHECK_INTERVAL}秒, CANDLE_MINUTES={CANDLE_MINUTES}, PUMP_THRESHOLD={PUMP_THRESHOLD*100:.0f}%")
     else:
         print(f"本番モード: {CANDLE_MINUTES}分足 / 閾値 {PUMP_THRESHOLD*100:.0f}%")
 
+    print("プールアドレスを取得中...")
+    pools = resolve_pools(TOKENS)
+    if not pools:
+        print("[ERROR] プールが1つも取得できませんでした")
+        return
+    print(f"{len(pools)}/{len(TOKENS)} トークンのプールを取得しました")
+
     print("Solana Pump Watcher 起動しました")
 
-    while True:
-        try:
-            token_data = get_token_data(TOKENS)
-        except Exception as e:
-            print(f"[ERROR] データ取得失敗: {e}")
-            time.sleep(CHECK_INTERVAL)
-            continue
+    alerted = {}  # symbol -> アラート済み足の timestamp
 
-        for symbol, mint in TOKENS.items():
-            d = token_data.get(mint)
-            if d is None:
+    while True:
+        for symbol in list(pools.keys()):
+            pool = pools[symbol]
+            try:
+                candle = get_confirmed_candle(pool)
+            except Exception as e:
+                print(f"[ERROR] {symbol} OHLCV取得失敗: {e}")
                 continue
-            check_and_alert(symbol, d["price"], d["change"], alerted)
+
+            if candle is None:
+                continue
+
+            body = (candle["close"] - candle["open"]) / candle["open"]
+
+            if DEBUG:
+                print(
+                    f"[DEBUG] {symbol}: O={candle['open']:.6f} H={candle['high']:.6f} "
+                    f"L={candle['low']:.6f} C={candle['close']:.6f} ({body*100:+.2f}%)"
+                )
+
+            if body >= PUMP_THRESHOLD and alerted.get(symbol) != candle["timestamp"]:
+                msg = (
+                    f"\n{symbol} 急騰！\n"
+                    f"O: {candle['open']:.6f} → C: {candle['close']:.6f}\n"
+                    f"変動率: {body*100:+.2f}%"
+                )
+                print(msg)
+                notify_line(msg)
+                alerted[symbol] = candle["timestamp"]
+
+            time.sleep(1)  # GeckoTerminal rate limit 対策
 
         time.sleep(CHECK_INTERVAL)
 
