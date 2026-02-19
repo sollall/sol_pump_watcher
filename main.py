@@ -1,7 +1,6 @@
 import argparse
 import os
 import time
-from datetime import datetime
 
 import requests
 
@@ -28,6 +27,14 @@ TOKENS = {
 CHECK_INTERVAL = 30  # 秒（デバッグ時は10秒に短縮）
 CANDLE_MINUTES = int(os.environ.get("CANDLE_MINUTES", "60"))  # N分足（デフォルト60分）
 PUMP_THRESHOLD = 0.10  # 10%
+
+# DexScreenerのpriceChangeフィールドに対応する時間足
+TIMEFRAME_MAP = {
+    5: "m5",
+    60: "h1",
+    360: "h6",
+    1440: "h24",
+}
 
 # ======================
 # LINE通知
@@ -57,8 +64,8 @@ def notify_line(message):
 # 価格取得（DexScreener API）
 # ======================
 
-def get_prices(tokens):
-    """全トークンの価格を一括取得する。mintアドレス→USD価格の辞書を返す。"""
+def get_token_data(tokens):
+    """全トークンの価格と変動率を一括取得する。"""
     mints = list(tokens.values())
     url = f"https://api.dexscreener.com/tokens/v1/solana/{','.join(mints)}"
     r = requests.get(url, timeout=10)
@@ -69,49 +76,52 @@ def get_prices(tokens):
             print(f"[DEBUG] API response: {data}")
         return {}
 
-    # mintアドレスごとに最初のペア（最も流動性が高い）の価格を取得
-    prices = {}
+    tf_key = TIMEFRAME_MAP.get(CANDLE_MINUTES, "h1")
+    result = {}
     for pair in data:
         addr = pair.get("baseToken", {}).get("address")
-        if addr and addr in mints and addr not in prices:
+        if addr and addr in mints and addr not in result:
             price_usd = pair.get("priceUsd")
-            if price_usd:
-                prices[addr] = float(price_usd)
+            change_pct = pair.get("priceChange", {}).get(tf_key)
+            if price_usd and change_pct is not None:
+                result[addr] = {
+                    "price": float(price_usd),
+                    "change": float(change_pct) / 100,
+                }
 
     if DEBUG:
         for symbol, mint in tokens.items():
-            if mint in prices:
-                print(f"[DEBUG] {symbol}: {prices[mint]:.10f} USD")
+            d = result.get(mint)
+            if d:
+                print(f"[DEBUG] {symbol}: {d['price']:.10f} USD (変動: {d['change']*100:+.2f}%)")
             else:
-                print(f"[DEBUG] {symbol}: 価格取得できず")
+                print(f"[DEBUG] {symbol}: データ取得できず")
 
-    return prices
+    return result
 
 # ======================
 # メイン監視ロジック
 # ======================
 
-def get_candle_time(dt):
-    """現在時刻をN分足の区切りに切り捨てる。"""
-    total_minutes = dt.hour * 60 + dt.minute
-    candle_start = (total_minutes // CANDLE_MINUTES) * CANDLE_MINUTES
-    return dt.replace(hour=candle_start // 60, minute=candle_start % 60, second=0, microsecond=0)
-
-
-def check_and_alert(symbol, price, base_prices):
-    """基準価格と比較し、閾値を超えていればアラートを送信する。"""
-    if symbol not in base_prices:
+def check_and_alert(symbol, price, change, alerted):
+    """変動率が閾値を超えていればアラートを送信する（同一足内での重複防止付き）。"""
+    if change < PUMP_THRESHOLD:
+        alerted.pop(symbol, None)
         return
-    prev = base_prices[symbol]
-    change = (price - prev) / prev
-    if change >= PUMP_THRESHOLD:
-        msg = (
-            f"\n{symbol} 急騰！\n"
-            f"価格: {price:.6f}\n"
-            f"変動率: +{change*100:.2f}%"
-        )
-        print(msg)
-        notify_line(msg)
+
+    now = time.time()
+    last_alert = alerted.get(symbol, 0)
+    if now - last_alert < CANDLE_MINUTES * 60:
+        return
+
+    msg = (
+        f"\n{symbol} 急騰！\n"
+        f"価格: {price:.6f}\n"
+        f"変動率: {change*100:+.2f}%"
+    )
+    print(msg)
+    notify_line(msg)
+    alerted[symbol] = now
 
 
 def parse_args():
@@ -127,50 +137,35 @@ def main():
     if DEBUG:
         CHECK_INTERVAL = 10
 
-    prev_close = {}      # 前の足の終値（アラート判定の基準）
-    last_prices = {}     # 現在の足で最後に取得した価格（次の足の終値になる）
-    last_candle = get_candle_time(datetime.now())
+    tf_key = TIMEFRAME_MAP.get(CANDLE_MINUTES)
+    if tf_key is None:
+        supported = ", ".join(str(m) for m in sorted(TIMEFRAME_MAP))
+        print(f"[ERROR] CANDLE_MINUTES={CANDLE_MINUTES} は未対応です（対応: {supported}）")
+        return
+
+    alerted = {}  # symbol -> 最後にアラートした時刻
 
     if DEBUG:
         print("[DEBUG] デバッグモードで起動")
-        print(f"[DEBUG] CHECK_INTERVAL={CHECK_INTERVAL}秒, PUMP_THRESHOLD={PUMP_THRESHOLD*100:.0f}%")
+        print(f"[DEBUG] CHECK_INTERVAL={CHECK_INTERVAL}秒, 時間足={tf_key}, PUMP_THRESHOLD={PUMP_THRESHOLD*100:.0f}%")
     else:
-        print(f"本番モード: {CANDLE_MINUTES}分足の更新タイミングでアラート判定")
+        print(f"本番モード: {CANDLE_MINUTES}分足 / 閾値 {PUMP_THRESHOLD*100:.0f}%")
 
     print("Solana Pump Watcher 起動しました")
 
     while True:
-        now = datetime.now()
-        current_candle = get_candle_time(now)
-
         try:
-            prices = get_prices(TOKENS)
+            token_data = get_token_data(TOKENS)
         except Exception as e:
-            print(f"[ERROR] 価格取得失敗: {e}")
+            print(f"[ERROR] データ取得失敗: {e}")
             time.sleep(CHECK_INTERVAL)
             continue
 
-        # 足が切り替わったら、前の足の最終価格を基準として確定
-        if not DEBUG and current_candle != last_candle:
-            if last_prices:
-                prev_close = last_prices.copy()
-            print(f"{CANDLE_MINUTES}分足更新: {last_candle.strftime('%H:%M')} → {current_candle.strftime('%H:%M')}")
-            last_candle = current_candle
-
         for symbol, mint in TOKENS.items():
-            price = prices.get(mint)
-            if price is None:
+            d = token_data.get(mint)
+            if d is None:
                 continue
-
-            last_prices[symbol] = price
-
-            if DEBUG:
-                # デバッグ: 毎サイクルで即時アラート判定
-                check_and_alert(symbol, price, prev_close)
-                prev_close[symbol] = price
-            else:
-                # 本番: 前の足の終値と比較してアラート判定
-                check_and_alert(symbol, price, prev_close)
+            check_and_alert(symbol, d["price"], d["change"], alerted)
 
         time.sleep(CHECK_INTERVAL)
 
