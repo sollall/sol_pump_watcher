@@ -69,15 +69,27 @@ def notify_line(message):
 GECKOTERMINAL_BASE = "https://api.geckoterminal.com/api/v2"
 
 
+def _gecko_get(url, params=None, max_retries=3):
+    """GeckoTerminal APIを429リトライ付きで呼び出す。"""
+    for attempt in range(max_retries):
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 429:
+            wait = 2 ** (attempt + 1)  # 2, 4, 8秒
+            print(f"[WARN] Rate limited, {wait}秒待機中...")
+            time.sleep(wait)
+            continue
+        r.raise_for_status()
+        return r.json()
+    raise Exception(f"Rate limit: {max_retries}回リトライ後も429")
+
+
 def resolve_pools(tokens):
     """各トークンのトップ・プールアドレスをGeckoTerminalから取得する。"""
     pools = {}
     for symbol, mint in tokens.items():
         try:
             url = f"{GECKOTERMINAL_BASE}/networks/solana/tokens/{mint}/pools"
-            r = requests.get(url, params={"page": 1}, timeout=10)
-            r.raise_for_status()
-            data = r.json()
+            data = _gecko_get(url, params={"page": 1})
             pool_list = data.get("data", [])
             if pool_list:
                 pool_addr = pool_list[0].get("attributes", {}).get("address")
@@ -90,7 +102,7 @@ def resolve_pools(tokens):
                 print(f"[WARN] {symbol}: プールが見つかりません")
         except Exception as e:
             print(f"[ERROR] {symbol} プール取得失敗: {e}")
-        time.sleep(0.5)  # rate limit 対策
+        time.sleep(2)  # rate limit 対策
     return pools
 
 
@@ -102,9 +114,7 @@ def get_confirmed_candle(pool_address):
     tf, agg = TIMEFRAME_MAP[CANDLE_MINUTES]
     url = f"{GECKOTERMINAL_BASE}/networks/solana/pools/{pool_address}/ohlcv/{tf}"
     params = {"aggregate": agg, "limit": 2, "currency": "usd"}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    data = r.json()
+    data = _gecko_get(url, params=params)
 
     ohlcv_list = data.get("data", {}).get("attributes", {}).get("ohlcv_list", [])
     if len(ohlcv_list) < 2:
@@ -158,20 +168,38 @@ def main():
 
     print("Solana Pump Watcher 起動しました")
 
-    alerted = {}  # symbol -> アラート済み足の timestamp
+    alerted = {}      # symbol -> アラート済み足の timestamp
+    candle_cache = {}  # symbol -> 確定足データ
+    next_fetch = 0     # 次にOHLCVを取得する時刻（unix timestamp）
 
     while True:
-        for symbol in list(pools.keys()):
-            pool = pools[symbol]
-            try:
-                candle = get_confirmed_candle(pool)
-            except Exception as e:
-                print(f"[ERROR] {symbol} OHLCV取得失敗: {e}")
-                continue
+        now = time.time()
 
-            if candle is None:
-                continue
+        # 足の境界を超えたら全トークンのOHLCVを再取得
+        if now >= next_fetch:
+            print(f"OHLCV取得中... ({len(pools)}トークン)")
+            for symbol in list(pools.keys()):
+                pool = pools[symbol]
+                try:
+                    candle = get_confirmed_candle(pool)
+                except Exception as e:
+                    print(f"[ERROR] {symbol} OHLCV取得失敗: {e}")
+                    continue
+                if candle:
+                    candle_cache[symbol] = candle
+                time.sleep(2)  # rate limit 対策
 
+            # 次の足の境界 + 5秒バッファ
+            candle_seconds = CANDLE_MINUTES * 60
+            next_fetch = ((now // candle_seconds) + 1) * candle_seconds + 5
+
+            if DEBUG:
+                from datetime import datetime
+                next_dt = datetime.fromtimestamp(next_fetch)
+                print(f"[DEBUG] 次回取得: {next_dt.strftime('%H:%M:%S')}")
+
+        # キャッシュされた確定足でアラート判定
+        for symbol, candle in candle_cache.items():
             body = (candle["close"] - candle["open"]) / candle["open"]
 
             if DEBUG:
@@ -189,8 +217,6 @@ def main():
                 print(msg)
                 notify_line(msg)
                 alerted[symbol] = candle["timestamp"]
-
-            time.sleep(1)  # GeckoTerminal rate limit 対策
 
         time.sleep(CHECK_INTERVAL)
 
