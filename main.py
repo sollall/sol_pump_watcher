@@ -46,9 +46,15 @@ def notify_line(message):
     headers = {
         "Authorization": f"Bearer {LINE_TOKEN}"
     }
-    data = {"message": message}
+    json={
+        "to": uid,
+        "messages": [{
+                        "type": "text",
+                        "text": message
+                    }]
+    }
     try:
-        r = requests.post(url, headers=headers, data=data)
+        r = requests.post(url, headers=headers, json=json)
         r.raise_for_status()
     except requests.RequestException as e:
         print(f"[ERROR] LINE通知に失敗: {e}")
