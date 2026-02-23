@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 import argparse
 import os
 import time
@@ -11,7 +14,8 @@ import requests
 
 DEBUG = False
 
-LINE_TOKEN = os.environ.get("LINE_NOTIFY_TOKEN", "")
+UID = os.getenv("UID", "")
+LINE_TOKEN = os.getenv("LINE_TOKEN", "")
 
 # 監視するトークン
 TOKENS = {
@@ -42,12 +46,12 @@ def notify_line(message):
         print("[WARN] LINE_NOTIFY_TOKEN が未設定です")
         return
 
-    url = "https://notify-api.line.me/api/notify"
+    url = "https://api.line.me/v2/bot/message/push"
     headers = {
         "Authorization": f"Bearer {LINE_TOKEN}"
     }
     json={
-        "to": uid,
+        "to": UID,
         "messages": [{
                         "type": "text",
                         "text": message
