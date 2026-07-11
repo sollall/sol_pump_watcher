@@ -10,3 +10,6 @@ wheels/
 .venv
 
 .env
+
+# ホルダー監視の状態ファイル
+holder_state_*.json
