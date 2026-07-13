@@ -12,8 +12,8 @@ LINEに通知する。
 注意:
 - getTokenLargestAccounts は最大20件までしか返さない仕様のため、
   TOP_N は20を超えて指定しても20件に丸められる。
-- 公開RPCだとレート制限や拒否をされやすいため、ALCHEMY_API_KEY に
-  AlchemyのAPIキーを設定して専用RPCを利用することを推奨。
+- RPCエンドポイントは Alchemy 固定。ALCHEMY_API_KEY にAPIキーを
+  設定すること（未設定の場合は不正なURLとなりRPC呼び出しに失敗する）。
 - getTokenLargestAccounts はトークンアカウント単位（ATA）の残高を返し、
   ウォレットのowner自体は返さない。1ウォレットにつき同一mintのATAは
   通常1つのため、実質的にウォレット単位のランキングとして扱う。
@@ -42,13 +42,8 @@ DEBUG = False
 TARGET_TOKEN = os.environ.get("TARGET_TOKEN", "")
 
 # Solana RPC エンドポイント（Alchemy）
-# ALCHEMY_API_KEY を設定すると Alchemy の Solana エンドポイントを自動組み立てする。
 ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY", "")
-SOLANA_RPC_URL = (
-    f"https://solana-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
-    if ALCHEMY_API_KEY
-    else "https://api.mainnet-beta.solana.com"
-)
+SOLANA_RPC_URL = f"https://solana-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
 
 # getTokenLargestAccounts が返す最大件数（Solana RPCの仕様上の上限）
 MAX_TOP_N = 20

@@ -13,7 +13,7 @@ Solana上のトークンを監視し、LINEに通知するスクリプト集。
 
 ```
 TARGET_TOKEN=<監視したいトークンのmintアドレス>
-ALCHEMY_API_KEY=<AlchemyのAPIキー>   # 指定するとAlchemyのSolanaエンドポイントを自動使用
+ALCHEMY_API_KEY=<AlchemyのAPIキー>
 LINE_TOKEN=<LINE Messaging APIのチャネルアクセストークン>
 UID=<通知先のLINEユーザーID>
 
@@ -22,9 +22,8 @@ TOP_N=20           # 監視する順位（最大20。超過分は丸められる
 CHECK_INTERVAL=300 # チェック間隔（秒）
 ```
 
-`ALCHEMY_API_KEY` にAlchemyのAPIキーを設定すれば、
-`https://solana-mainnet.g.alchemy.com/v2/<APIKEY>` を自動的にRPCエンドポイントとして使用する。
-公開RPC (`api.mainnet-beta.solana.com`) はレート制限や拒否をされやすいため非推奨。
+RPCエンドポイントは Alchemy 固定（`https://solana-mainnet.g.alchemy.com/v2/<ALCHEMY_API_KEY>`）。
+`ALCHEMY_API_KEY` は必須で、未設定の場合はRPC呼び出しに失敗する。
 
 Token-2022（拡張付きトークン）には対応していない。
 
