@@ -30,14 +30,13 @@ from datetime import datetime
 import base58
 import requests
 
+from line_notify import notify_line
+
 # ======================
 # 設定
 # ======================
 
 DEBUG = False
-
-UID = os.getenv("UID", "")
-LINE_TOKEN = os.getenv("LINE_TOKEN", "")
 
 # 監視するトークンの mint アドレス
 TARGET_TOKEN = os.environ.get("TARGET_TOKEN", "")
@@ -58,31 +57,6 @@ STATE_DIR = os.environ.get("STATE_DIR", ".")
 
 # 通知に含める変動の最大表示件数
 MAX_LIST_IN_NOTIFY = 10
-
-# ======================
-# LINE通知
-# ======================
-
-def notify_line(message):
-    if DEBUG:
-        print(f"[DEBUG] LINE通知（送信スキップ）: {message}")
-        return
-
-    if not LINE_TOKEN:
-        print("[WARN] LINE_TOKEN が未設定です")
-        return
-
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {"Authorization": f"Bearer {LINE_TOKEN}"}
-    json_data = {
-        "to": UID,
-        "messages": [{"type": "text", "text": message}],
-    }
-    try:
-        r = requests.post(url, headers=headers, json=json_data)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[ERROR] LINE通知に失敗: {e}")
 
 # ======================
 # Solana RPC
@@ -261,7 +235,7 @@ def run_check(mint, top_n):
     if entered or exited:
         msg = build_notify_message(mint, entered, exited, curr_holders, decimals, top_n)
         print(msg)
-        notify_line(msg)
+        notify_line(msg, debug=DEBUG)
     else:
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 変動なし（上位{top_n}人）")
 

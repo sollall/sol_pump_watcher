@@ -20,14 +20,13 @@ from datetime import datetime
 
 import requests
 
+from line_notify import notify_line
+
 # ======================
 # 設定
 # ======================
 
 DEBUG = False
-
-UID = os.getenv("UID", "")
-LINE_TOKEN = os.getenv("LINE_TOKEN", "")
 
 # 急騰判定の閾値 (%)
 SURGE_THRESHOLD = float(os.environ.get("SURGE_THRESHOLD", "10"))
@@ -52,31 +51,6 @@ NOTIFY_COOLDOWN = int(os.environ.get("NOTIFY_COOLDOWN", "3600"))
 PUMP_API_BASE = "https://frontend-api-v3.pump.fun"
 DEXSCREENER_API = "https://api.dexscreener.com"
 DEXSCREENER_BATCH_SIZE = 30  # DexScreenerは一度に30アドレスまで
-
-# ======================
-# LINE通知
-# ======================
-
-def notify_line(message):
-    if DEBUG:
-        print(f"[DEBUG] LINE通知（送信スキップ）: {message}")
-        return
-
-    if not LINE_TOKEN:
-        print("[WARN] LINE_TOKEN が未設定です")
-        return
-
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {"Authorization": f"Bearer {LINE_TOKEN}"}
-    json_data = {
-        "to": UID,
-        "messages": [{"type": "text", "text": message}],
-    }
-    try:
-        r = requests.post(url, headers=headers, json=json_data)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[ERROR] LINE通知に失敗: {e}")
 
 # ======================
 # pump.fun API: トークン取得
@@ -386,7 +360,7 @@ def main():
                             f"時価総額: ${s['market_cap']:,.0f}\n"
                             f"{dex_url}"
                         )
-                        notify_line(msg)
+                        notify_line(msg, debug=DEBUG)
                         notified[addr] = now
 
                 print(f"  {'='*50}")
