@@ -18,7 +18,6 @@ LINE_TOKEN=<LINE Messaging APIのチャネルアクセストークン>
 UID=<通知先のLINEユーザーID>
 
 # 任意
-SOLANA_RPC_URL=<Solana RPCエンドポイントを直接指定>   # 指定時はALCHEMY_API_KEYより優先。省略時は公開RPC
 TOP_N=20           # 監視する順位（最大20。超過分は丸められる）
 CHECK_INTERVAL=300 # チェック間隔（秒）
 ```
