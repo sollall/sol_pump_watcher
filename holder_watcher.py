@@ -10,8 +10,9 @@ Solana 上位ホルダー監視
 
 注意:
 - getProgramAccounts はコストの高いRPC呼び出しのため、公開RPCだと
-  レート制限や拒否をされやすい。Helius / QuickNode 等の専用RPCの
-  利用を推奨（SOLANA_RPC_URL で指定）。
+  レート制限や拒否をされやすい。Alchemy 等の専用RPCの利用を推奨
+  （ALCHEMY_API_KEY にAPIキーを設定するか、SOLANA_RPC_URL で
+  エンドポイントを直接指定する）。
 - Token-2022 (拡張付きトークン) には対応していない（クラシックな
   SPL Token Program のトークンアカウントのみを対象とする）。
 """
@@ -42,7 +43,14 @@ DEBUG = False
 TARGET_TOKEN = os.environ.get("TARGET_TOKEN", "")
 
 # Solana RPC エンドポイント
-SOLANA_RPC_URL = os.environ.get("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
+# ALCHEMY_API_KEY を設定するとAlchemyのSolanaエンドポイントを自動組み立てする。
+# SOLANA_RPC_URL を明示指定した場合はそちらを優先する。
+ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY", "")
+SOLANA_RPC_URL = os.environ.get("SOLANA_RPC_URL") or (
+    f"https://solana-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
+    if ALCHEMY_API_KEY
+    else "https://api.mainnet-beta.solana.com"
+)
 
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
