@@ -2,33 +2,33 @@
 """
 Solana 上位ホルダー監視
 
-指定した1銘柄について、上位N人（デフォルト100人）のホルダーの顔ぶれを
-定期的にチェックし、新規ランクイン/ランク外脱落があればLINEに通知する。
+指定した1銘柄について、上位N人（最大20人。Solana RPCの仕様上の上限）の
+ホルダーの顔ぶれを定期的にチェックし、新規ランクイン/ランク外脱落があれば
+LINEに通知する。
 
-ホルダー取得: Solana JSON-RPC (getProgramAccounts, SPL Token Program)
+ホルダー取得: Solana JSON-RPC (getTokenLargestAccounts)
 通知: LINE Messaging API
 
 注意:
-- getProgramAccounts はコストの高いRPC呼び出しのため、公開RPCだと
-  レート制限や拒否をされやすい。Alchemy 等の専用RPCの利用を推奨
-  （ALCHEMY_API_KEY にAPIキーを設定するか、SOLANA_RPC_URL で
-  エンドポイントを直接指定する）。
-- Token-2022 (拡張付きトークン) には対応していない（クラシックな
-  SPL Token Program のトークンアカウントのみを対象とする）。
+- getTokenLargestAccounts は最大20件までしか返さない仕様のため、
+  TOP_N は20を超えて指定しても20件に丸められる。
+- 公開RPCだとレート制限や拒否をされやすいため、Alchemy 等の専用RPCの
+  利用を推奨（ALCHEMY_API_KEY にAPIキーを設定するか、SOLANA_RPC_URL
+  でエンドポイントを直接指定する）。
+- getTokenLargestAccounts はトークンアカウント単位（ATA）の残高を返し、
+  ウォレットのowner自体は返さない。1ウォレットにつき同一mintのATAは
+  通常1つのため、実質的にウォレット単位のランキングとして扱う。
 """
 
 from dotenv import load_dotenv
 load_dotenv()
 
 import argparse
-import base64
 import json
 import os
-import struct
 import time
 from datetime import datetime
 
-import base58
 import requests
 
 from line_notify import notify_line
@@ -52,10 +52,11 @@ SOLANA_RPC_URL = os.environ.get("SOLANA_RPC_URL") or (
     else "https://api.mainnet-beta.solana.com"
 )
 
-TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+# getTokenLargestAccounts が返す最大件数（Solana RPCの仕様上の上限）
+MAX_TOP_N = 20
 
-# 監視する順位（上位N人）
-TOP_N = int(os.environ.get("TOP_N", "100"))
+# 監視する順位（上位N人）。MAX_TOP_N を超える値は丸められる。
+TOP_N = min(int(os.environ.get("TOP_N", str(MAX_TOP_N))), MAX_TOP_N)
 
 # チェック間隔（秒）。ホルダー取得はコストが高いため長めを推奨
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
@@ -86,44 +87,16 @@ def get_token_decimals(mint):
     return int(result["value"]["decimals"])
 
 
-def fetch_holders(mint):
-    """指定 mint のトークンアカウントを全件取得し、owner単位で残高を集計する。
-
-    dataSlice で SPL Token アカウントのうち owner(32byte, offset 32) と
-    amount(u64, offset 64) の連続領域（offset 32〜72の40byte）のみ取得し、
-    レスポンスサイズを抑える。
-    """
-    params = [
-        TOKEN_PROGRAM_ID,
-        {
-            "encoding": "base64",
-            "dataSlice": {"offset": 32, "length": 40},
-            "filters": [
-                {"dataSize": 165},
-                {"memcmp": {"offset": 0, "bytes": mint}},
-            ],
-        },
-    ]
-    result = _rpc_call("getProgramAccounts", params)
-
-    balances = {}
-    for item in result:
-        raw = base64.b64decode(item["account"]["data"][0])
-        if len(raw) != 40:
-            continue
-        owner_bytes, amount = struct.unpack("<32sQ", raw)
-        if amount == 0:
-            continue
-        owner = base58.b58encode(owner_bytes).decode()
-        balances[owner] = balances.get(owner, 0) + amount
-
-    return balances
-
-
 def get_top_holders(mint, top_n):
-    balances = fetch_holders(mint)
-    ranked = sorted(balances.items(), key=lambda kv: kv[1], reverse=True)[:top_n]
-    return [{"owner": owner, "amount": amount} for owner, amount in ranked]
+    """getTokenLargestAccounts で上位ホルダー（トークンアカウント単位）を動的に取得する。
+
+    最大20件までしか返らない（Solana RPCの仕様上の上限）ため、
+    top_n が20を超えていても実際には20件までしか返らない。
+    """
+    result = _rpc_call("getTokenLargestAccounts", [mint, {"commitment": "confirmed"}])
+    accounts = result["value"]
+    ranked = sorted(accounts, key=lambda a: int(a["amount"]), reverse=True)[:top_n]
+    return [{"owner": a["address"], "amount": int(a["amount"])} for a in ranked]
 
 # ======================
 # 状態の保存・読込
@@ -213,7 +186,7 @@ def parse_args():
     parser.add_argument("--debug", action="store_true", help="デバッグモードで起動")
     parser.add_argument("--once", action="store_true", help="1回だけチェックして終了")
     parser.add_argument("--token", help="監視するトークンの mint アドレス")
-    parser.add_argument("--top", type=int, help="監視する順位（上位N人）")
+    parser.add_argument("--top", type=int, help=f"監視する順位（上位N人、最大{MAX_TOP_N}）")
     parser.add_argument("--interval", type=int, help="チェック間隔（秒）")
     return parser.parse_args()
 
@@ -257,7 +230,7 @@ def main():
     DEBUG = args.debug or os.environ.get("DEBUG", "false").lower() in ("true", "1", "yes")
 
     mint = args.token or TARGET_TOKEN
-    top_n = args.top or TOP_N
+    top_n = min(args.top, MAX_TOP_N) if args.top else TOP_N
     interval = args.interval or CHECK_INTERVAL
 
     if not mint:

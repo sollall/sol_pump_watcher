@@ -4,8 +4,10 @@ Solana上のトークンを監視し、LINEに通知するスクリプト集。
 
 ## holder_watcher.py — 上位ホルダー変動監視
 
-指定した1銘柄について、上位N人（デフォルト100人）のホルダーの顔ぶれを
-定期チェックし、新規ランクイン/ランク外脱落があればLINE通知する。
+指定した1銘柄について、上位N人（最大20人。`getTokenLargestAccounts` の
+仕様上の上限）のホルダーの顔ぶれを定期チェックし、新規ランクイン/
+ランク外脱落があればLINE通知する。ホルダーは `getTokenLargestAccounts`
+でその都度動的に取得する（固定リストではない）。
 
 ### 必要な環境変数（`.env`）
 
@@ -17,13 +19,13 @@ UID=<通知先のLINEユーザーID>
 
 # 任意
 SOLANA_RPC_URL=<Solana RPCエンドポイントを直接指定>   # 指定時はALCHEMY_API_KEYより優先。省略時は公開RPC
-TOP_N=100          # 監視する順位
+TOP_N=20           # 監視する順位（最大20。超過分は丸められる）
 CHECK_INTERVAL=300 # チェック間隔（秒）
 ```
 
-`getProgramAccounts` を使うため、公開RPC (`api.mainnet-beta.solana.com`) は
-レート制限や拒否をされやすい。`ALCHEMY_API_KEY` にAlchemyのAPIキーを設定すれば、
+`ALCHEMY_API_KEY` にAlchemyのAPIキーを設定すれば、
 `https://solana-mainnet.g.alchemy.com/v2/<APIKEY>` を自動的にRPCエンドポイントとして使用する。
+公開RPC (`api.mainnet-beta.solana.com`) はレート制限や拒否をされやすいため非推奨。
 
 Token-2022（拡張付きトークン）には対応していない。
 
@@ -32,7 +34,7 @@ Token-2022（拡張付きトークン）には対応していない。
 ```
 uv run python holder_watcher.py
 uv run python holder_watcher.py --once --debug          # 1回だけ実行（通知はスキップ）
-uv run python holder_watcher.py --token <mint> --top 50  # 上位50人を監視
+uv run python holder_watcher.py --token <mint> --top 20  # 上位20人を監視
 ```
 
 初回実行時は現在の上位ホルダーを記録するだけで通知は行わない。
