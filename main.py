@@ -8,14 +8,13 @@ from datetime import datetime
 
 import requests
 
+from line_notify import notify_line
+
 # ======================
 # 設定
 # ======================
 
 DEBUG = False
-
-UID = os.getenv("UID", "")
-LINE_TOKEN = os.getenv("LINE_TOKEN", "")
 
 # 監視するトークン
 TOKENS = {
@@ -32,36 +31,6 @@ TOKENS = {
 CHECK_INTERVAL = 30  # 秒（デバッグ時は10秒に短縮）
 CANDLE_MINUTES = int(os.environ.get("CANDLE_MINUTES", "60"))  # N分足（デフォルト60分）
 PUMP_THRESHOLD = 0.10  # 10%
-
-# ======================
-# LINE通知
-# ======================
-
-def notify_line(message):
-    if DEBUG:
-        print(f"[DEBUG] LINE通知（送信スキップ）: {message}")
-        return
-
-    if not LINE_TOKEN:
-        print("[WARN] LINE_NOTIFY_TOKEN が未設定です")
-        return
-
-    url = "https://api.line.me/v2/bot/message/push"
-    headers = {
-        "Authorization": f"Bearer {LINE_TOKEN}"
-    }
-    json={
-        "to": UID,
-        "messages": [{
-                        "type": "text",
-                        "text": message
-                    }]
-    }
-    try:
-        r = requests.post(url, headers=headers, json=json)
-        r.raise_for_status()
-    except requests.RequestException as e:
-        print(f"[ERROR] LINE通知に失敗: {e}")
 
 # ======================
 # 価格取得（DexScreener API）
@@ -149,7 +118,7 @@ def main():
                             f"変動率: {change*100:+.2f}%"
                         )
                         print(msg)
-                        notify_line(msg)
+                        notify_line(msg, debug=DEBUG)
 
             prev_prices = prices
 
