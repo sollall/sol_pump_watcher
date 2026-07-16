@@ -86,8 +86,26 @@ def get_top_holders(mint, top_n):
     最大20件までしか返らない（Solana RPCの仕様上の上限）ため、
     top_n が20を超えていても実際には20件までしか返らない。
     """
-    result = _rpc_call("getTokenLargestAccounts", [mint, {"commitment": "confirmed"}])
-    accounts = result["value"]
+    payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "getTokenLargestAccounts",
+        "params": [
+            mint,
+            {"commitment": "confirmed"}
+        ]
+    }
+
+    headers = {"Content-Type": "application/json"}
+
+    response = requests.post(SOLANA_RPC_URL, json=payload, headers=headers, timeout=60)
+    response.raise_for_status()
+    data = response.json()
+
+    if "error" in data:
+        raise RuntimeError(f"RPC error: {data['error']}")
+
+    accounts = data["result"]["value"]
     ranked = sorted(accounts, key=lambda a: int(a["amount"]), reverse=True)[:top_n]
     return [{"owner": a["address"], "amount": int(a["amount"])} for a in ranked]
 
