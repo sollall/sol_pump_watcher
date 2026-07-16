@@ -28,9 +28,8 @@ import os
 import time
 from datetime import datetime
 
-import requests
-
 from line_notify import notify_line
+from solana_rpc import SOLANA_RPC_URL, rpc_call
 
 # ======================
 # 設定
@@ -40,10 +39,6 @@ DEBUG = False
 
 # 監視するトークンの mint アドレス
 TARGET_TOKEN = os.environ.get("TARGET_TOKEN", "")
-
-# Solana RPC エンドポイント（Alchemy）
-ALCHEMY_API_KEY = os.environ.get("ALCHEMY_API_KEY", "")
-SOLANA_RPC_URL = f"https://solana-mainnet.g.alchemy.com/v2/{ALCHEMY_API_KEY}"
 
 # getTokenLargestAccounts が返す最大件数（Solana RPCの仕様上の上限）
 MAX_TOP_N = 20
@@ -64,19 +59,9 @@ MAX_LIST_IN_NOTIFY = 10
 # Solana RPC
 # ======================
 
-def _rpc_call(method, params):
-    payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
-    r = requests.post(SOLANA_RPC_URL, json=payload, timeout=60)
-    r.raise_for_status()
-    data = r.json()
-    if "error" in data:
-        raise RuntimeError(f"RPC error: {data['error']}")
-    return data["result"]
-
-
 def get_token_decimals(mint):
     """トークンの decimals を取得する。"""
-    result = _rpc_call("getTokenSupply", [mint])
+    result = rpc_call("getTokenSupply", [mint])
     return int(result["value"]["decimals"])
 
 
@@ -86,7 +71,7 @@ def get_top_holders(mint, top_n):
     最大20件までしか返らない（Solana RPCの仕様上の上限）ため、
     top_n が20を超えていても実際には20件までしか返らない。
     """
-    result = _rpc_call("getTokenLargestAccounts", [mint, {"commitment": "confirmed"}])
+    result = rpc_call("getTokenLargestAccounts", [mint, {"commitment": "confirmed"}])
     accounts = result["value"]
     ranked = sorted(accounts, key=lambda a: int(a["amount"]), reverse=True)[:top_n]
     return [{"owner": a["address"], "amount": int(a["amount"])} for a in ranked]
